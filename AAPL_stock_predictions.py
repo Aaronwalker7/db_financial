@@ -100,10 +100,6 @@ AAPL = aapl.history(start = '2015-01-01')
 
 # COMMAND ----------
 
-globals()[stock] = aapl.history(start = '2000-01-01')
-
-# COMMAND ----------
-
 # MAGIC %md
 # MAGIC ### Creating two targets to see which works better
 
@@ -139,7 +135,7 @@ display(pyspark.pandas.from_pandas(AAPL))
 
 # COMMAND ----------
 
-test = spark.createDataFrame(AAPL)
+display(AAPL)
 
 # COMMAND ----------
 
@@ -153,36 +149,50 @@ AAPL.describe()
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Train-Test Split
-
-# COMMAND ----------
-
-AAPL_train = AAPL[:2200]
-AAPL_test = AAPL[2200:]
+# MAGIC ## Train-Val-Test Split
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Saving Model as Table
+# MAGIC Here I am splitting the data based on chronological order. The first 70% is to train, the next 15% is to validate and the final 15% is to test on.
 
 # COMMAND ----------
 
-spark.sql('DROP TABLE aaronxwalker.aapl_returns_baseline_automl_forecasting')
+train_samples = int(AAPL.shape[0]*0.7)
+val_samples = int(AAPL.shape[0]*0.15)
+test_samples = int(AAPL.shape[0]*0.15)
 
 # COMMAND ----------
 
-spark_df = spark.createDataFrame(AAPL_train)
+AAPL_train = AAPL[:train_samples]
+AAPL_val = AAPL[train_samples:train_samples + val_samples]
+AAPL_test = AAPL[train_samples+val_samples:]
 
-spark_df.write.option('overwriteSchema','true').mode("overwrite").saveAsTable("aaronxwalker.AAPL_returns_baseline_AutoML_forecasting_train")
+# COMMAND ----------
+
+AAPL_train = spark.createDataFrame(AAPL_train)
+AAPL_val = spark.createDataFrame(AAPL_val)
+AAPL_test = spark.createDataFrame(AAPL_test)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Saving Data to Table
+
+# COMMAND ----------
+
+AAPL_train.write.option('overwriteSchema','true').mode("overwrite").saveAsTable("aaronxwalker.AAPL_returns_train")
+AAPL_val.write.option('overwriteSchema','true').mode("overwrite").saveAsTable("aaronxwalker.AAPL_returns_val")
+AAPL_test.write.option('overwriteSchema','true').mode("overwrite").saveAsTable("aaronxwalker.AAPL_returns_test")
 
 # COMMAND ----------
 
 #you can create a new pandas dataframe witht the following command:
-AAPL = spark.sql('select * from aaronxwalker.AAPL_returns_baseline_AutoML_forecasting').toPandas()
+AAPL_test = spark.sql('select * from aaronxwalker.aapl_returns_test')
 
 # COMMAND ----------
 
-AAPL
+AAPL_train.show()
 
 # COMMAND ----------
 
