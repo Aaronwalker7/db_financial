@@ -1,0 +1,7 @@
+{
+  "host": "https://dbc-bd9057cf-aa28.cloud.databricks.com/",
+  "authType": "databricks-cli",
+  "databricksPath": "/Users/aaronwalker/.vscode/extensions/databricks.databricks-1.2.7-darwin-arm64/bin/databricks",
+  "clusterId": "1012-144450-ebw79brt",
+  "workspacePath": "/Users/aaronwalker@kubrickgroup.com/.ide/db_financial-307827e7"
+}
