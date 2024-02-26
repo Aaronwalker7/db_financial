@@ -17,6 +17,8 @@
 from pyspark.sql import SparkSession
 import pyspark.sql
 import pyspark.pandas
+from pyspark.sql.functions import avg
+from pyspark.sql import functions as F
 
 # COMMAND ----------
 
@@ -52,6 +54,7 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pyspark import pandas as ps
+import datetime
 
 # COMMAND ----------
 
@@ -97,6 +100,19 @@ aapl = yf.Ticker(stock)
 # COMMAND ----------
 
 AAPL = aapl.history(start = '2015-01-01')
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Converting datetime to date
+
+# COMMAND ----------
+
+AAPL['Date'] = pd.to_datetime(AAPL['Date']).dt.date
+
+# COMMAND ----------
+
+AAPL.dtypes
 
 # COMMAND ----------
 
@@ -176,6 +192,10 @@ AAPL_test = spark.createDataFrame(AAPL_test)
 
 # COMMAND ----------
 
+display(AAPL_train.dtypes)
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Saving Data to Table
 
@@ -198,6 +218,45 @@ AAPL_train.show()
 
 # MAGIC %md
 # MAGIC ## baseline model (using AutoML)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Comparing results of validation predictions to actual
+
+# COMMAND ----------
+
+
+ forecast_pred = spark.table('aaronxwalker.forecast_prediction_bca7ef16')
+
+# COMMAND ----------
+
+display(forecast_pred)
+
+# COMMAND ----------
+
+display(AAPL_val)
+
+# COMMAND ----------
+
+display(AAPL_val.agg(avg('returns')).collect()[0][0])
+
+# COMMAND ----------
+
+actual = AAPL_val.withColumnRenamed('returns', 'actual')
+actual = actual.withColumnRenamed('Date', 'date2')
+
+# COMMAND ----------
+
+predictions = forecast_pred.join(actual, on = forecast_pred['Date'] == actual['date2'], how = 'inner')
+
+# COMMAND ----------
+
+predictions = predictions.select('Date', 'returns', 'returns_lower', 'returns_upper', 'actual')
+
+# COMMAND ----------
+
+display(predictions)
 
 # COMMAND ----------
 
