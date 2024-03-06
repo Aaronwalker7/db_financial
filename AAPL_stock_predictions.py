@@ -5,7 +5,7 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC The aim of this notebook is to build a model that can predict the future price of an asset for the next day.
+# MAGIC The aim of this notebook is to build a model that can predict the future price of AAPL's stock for the next day.
 
 # COMMAND ----------
 
@@ -40,6 +40,7 @@ spark.sql(f"CREATE DATABASE IF NOT EXISTS aaronxwalker")
 # COMMAND ----------
 
 # MAGIC %pip install yfinance
+# MAGIC %pip install fredapi
 
 # COMMAND ----------
 
@@ -59,7 +60,7 @@ import datetime
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## data collection
+# MAGIC ## importing AAPL stock data
 
 # COMMAND ----------
 
@@ -96,23 +97,61 @@ import datetime
 
 stock = 'AAPL'
 aapl = yf.Ticker(stock)
-
-# COMMAND ----------
-
 AAPL = aapl.history(start = '2015-01-01')
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Converting datetime to date
+# MAGIC ## Curating Data
 
 # COMMAND ----------
 
-AAPL['Date'] = pd.to_datetime(AAPL['Date']).dt.date
+# MAGIC %md
+# MAGIC ### macroeconomic data
 
 # COMMAND ----------
 
-AAPL.dtypes
+from fredapi import Fred
+fred = Fred(api_key_file='fred_api_key.txt')
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC
+# MAGIC #### the following are the tickers for the macro datasets and their name
+# MAGIC
+# MAGIC T10YIE - 10 year average expected inflation in US
+# MAGIC
+# MAGIC CPIAUCSL - inflation rate in US
+# MAGIC
+# MAGIC UNRATE - unemployment rate in US
+# MAGIC
+# MAGIC GDP - GDP in US
+# MAGIC
+# MAGIC GDPC1 - real GDP in US
+# MAGIC
+# MAGIC FEDFUNDS - effective federal funds rate (overnight interbank borrowing) in US
+# MAGIC
+# MAGIC REAINTRATREARAT10Y - 10 year real interest rate in US (nominal - inflation)
+
+# COMMAND ----------
+
+macroeconomic = ['T10YIE', 'CPIAUCSL', 'UNRATE', 'GDP', 'GDPC1', 'FEDFUNDS', 'REAINTRATREARAT10Y']
+
+# COMMAND ----------
+
+data = fred.get_series('A939RX0Q048SBEA')
+data
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC get realtime_start to see when it was actually recorded so you know how long to lag it by, for example in the below it has a date of 10th October 2023 for the data (beginning of the quarter) but actually it wasn't available data until 28th February 2024
+
+# COMMAND ----------
+
+df = fred.get_series_all_releases('A939RX0Q048SBEA')
+df.tail()
 
 # COMMAND ----------
 
@@ -144,10 +183,6 @@ for i in AAPL.columns:
 # COMMAND ----------
 
 AAPL.reset_index(inplace = True)
-
-# COMMAND ----------
-
-display(pyspark.pandas.from_pandas(AAPL))
 
 # COMMAND ----------
 
