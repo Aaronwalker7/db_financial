@@ -101,36 +101,73 @@ fred = Fred(api_key_file='fred_api_key.txt')
 # COMMAND ----------
 
 class StockData(pd.DataFrame):
-    def __init__(self, ticker, start):
+    def __init__(self, ticker: str, start: str):
         """
-        Initialize StockData object.
+        Initialize StockData object. This will 
 
         Parameters:
-        - ticker (str): Ticker symbol of the stock.
+        - ticker (str): Ticker symbol of the stock, retrieved from yfinance. 
         - start (str): Start date for stock data retrieval (format: 'YYYY-MM-DD').
         """
-        # Fetch stock data using yfinance
         stock_data = yf.Ticker(ticker).history(start=start)
-        
-        # Call the superclass (DataFrame) constructor
+
         super().__init__(stock_data)
 
-    def attach_fred_data(self, tickers):
+    def single_fred_data(self, ticker: str):
         """
-        Attach FRED data to the StockData object.
+        Retrieve data for a single ticker from the St Louis Fed (FREDAPI).
 
         Parameters:
-        - fred_tickers (list): List of FRED data series tickers.
+        - ticker: FRED data series ticker.
         """
-        for data in tickers:
-            df = fred.get_series_all_releases(data, realtime_start=self.index.min().strftime('%Y-%m-%d'), realtime_end=datetime.datetime.now().strftime('%Y-%m-%d'))
-            df['realtime_start'] = df['realtime_start'].dt.tz_localize('America/New_York')
-            df.drop_duplicates(subset='realtime_start', keep='last', inplace=True)
-            for col in renamed_cols:
-                df.rename(columns={col: col + '_' + data}, inplace=True)
-            self = self.merge(right=df, left_index=True, right_on='realtime_start', how='left')
-            self.set_index('realtime_start', inplace=True, drop=True)
-        return self
+        df = fred.get_series_all_releases(ticker, realtime_start=self.index.min().strftime('%Y-%m-%d'), realtime_end=datetime.datetime.now().strftime('%Y-%m-%d'))
+        return df
+    
+    def clean_fred_data(self, data:str, df: pd.DataFrame, tz : str = 'America/New_York'):
+        """
+        Cleans the data including converting the Datetime column into the local time of the area you want and only keeping the last value when duplicates arise (related to FREDAPI data). Also renames the columns to include ticker as a suffix to differentiate.
+
+        Parameters:
+        - tz: Any timezone you want, a list can be found online.
+        """
+        df['realtime_start'] = df['realtime_start'].dt.tz_localize(tz)
+        df.drop_duplicates(subset='realtime_start', keep='last', inplace=True)
+        for col in renamed_cols:
+            df.rename(columns={col: col + '_' + data}, inplace=True)
+        return df
+    
+    def merge_stock(self, left: StockData, right: pd.DataFrame) -> StockData:
+        merged_stock = left.merge(right = right, left_index = True, right_on = 'realtime_start', how = 'left')
+        merged_stock.__class__ = StockData
+        return merged_stock
+    
+    def copy(self, deep=True):
+        copied_data = super().copy(deep = True)
+        if deep:
+            copied_data.__class__ = StockData
+        return copied_data
+    
+    def set_fred_index(self, df: StockData = fred_data):
+
+        new_data = df.set_index(keys = 'realtime_start', drop = True)
+        new_data.__class__ = StockData
+        return new_data
+
+    def attach_fred_data(self, fred_tickers: list, tz: str = 'America/New_York') -> StockData:
+        """
+        Attach macroeconomic data to the StockData object, retrieved from St Louis Fed (FREDAPI).
+
+        Parameters:
+        - tickers (list): List of FRED data series tickers.
+        - tz (str): Any timezone you want, a list can be found online.
+        """
+        fred_data = self.copy(deep = True)
+        for ticker in fred_tickers:
+            df = self.single_fred_data(ticker)
+            df = self.clean_fred_data(ticker, df, tz = tz)
+            fred_data = self.merge_stock(fred_data, df)
+            fred_data = self.set_fred_index(df = fred_data)
+        return fred_data
 
 
 # COMMAND ----------
@@ -143,12 +180,28 @@ AAPL = StockData(ticker, start_date)
 
 # COMMAND ----------
 
-stock_data_instance
+AAPL
+
+# COMMAND ----------
+
+hasattr(AAPL, 'single_fred_data') and callable(AAPL.single_fred_data)
+
+# COMMAND ----------
+
+fred_tickers
 
 # COMMAND ----------
 
 # Attach FRED data
-stock_data_instance = stock_data_instance.attach_fred_data(fred_data)
+stock_data_instance = AAPL.attach_fred_data(fred_tickers = fred_tickers)
+
+# COMMAND ----------
+
+type(stock_data_instance)
+
+# COMMAND ----------
+
+stock_data_instance
 
 # COMMAND ----------
 
@@ -235,7 +288,7 @@ AAPL = aapl.history(start = '2017-01-01')
 
 # COMMAND ----------
 
-fred_data = ['T10YIE', 'CPIAUCSL', 'UNRATE', 'GDP', 'GDPC1', 'FEDFUNDS', 'REAINTRATREARAT10Y', 'MORTGAGE30US', 'MORTGAGE15US', 'A792RC0Q052SBEA']
+fred_tickers = ['T10YIE', 'CPIAUCSL', 'UNRATE', 'GDP', 'GDPC1', 'FEDFUNDS', 'REAINTRATREARAT10Y', 'MORTGAGE30US', 'MORTGAGE15US', 'A792RC0Q052SBEA']
 yahoo_data = ['GBPUSD=X', 'EURUSD=X', 'CNY=X']
 renamed_cols = fred.get_series_all_releases('T10YIE', realtime_start='2017-01-01', realtime_end=datetime.datetime.now().strftime('%Y-%m-%d')).columns.drop('realtime_start')
 
@@ -259,8 +312,8 @@ AAPL
 
 df = fred.get_series_all_releases('T10YIE', realtime_start='2017-01-01', realtime_end=datetime.datetime.now().strftime('%Y-%m-%d'))
 df['realtime_start'] = df['realtime_start'].dt.tz_localize('America/New_York')
-df.drop_duplicates(subset = 'realtime_start', keep = 'last', inplace = True)
-
+# df.drop_duplicates(subset = 'realtime_start', keep = 'last', inplace = True)
+df
 
 # COMMAND ----------
 
