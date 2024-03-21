@@ -100,22 +100,10 @@ fred = Fred(api_key_file='fred_api_key.txt')
 
 # COMMAND ----------
 
-class StockData(pd.DataFrame):
-    def __init__(self, stock_ticker: str, stock_start_date: str):
-        """
-        Initialize StockData object. This will 
-
-        Parameters:
-        - ticker (str): Ticker symbol of the stock, retrieved from yfinance. 
-        - start (str): Start date for stock data retrieval (format: 'YYYY-MM-DD').
-        """
-        stock_data = yf.Ticker(stock_ticker).history(start=stock_start_date)
-
-        super().__init__(stock_data)
-
-    # @property
-    # def _constructor(self):
-    #     return StockData
+@pd.api.extensions.register_dataframe_accessor("findata")
+class StockData:
+    def __init__(self, pandas_obj):
+        self._obj = pandas_obj
 
     def single_fred_data(self, fred_ticker: str):
         """
@@ -124,10 +112,11 @@ class StockData(pd.DataFrame):
         Parameters:
         - ticker: FRED data series ticker.
         """
-        fred_ticker_df = fred.get_series_all_releases(fred_ticker, realtime_start=self.index.min().strftime('%Y-%m-%d'), realtime_end=datetime.datetime.now().strftime('%Y-%m-%d'))
+        fred_ticker_df = fred.get_series_all_releases(fred_ticker, realtime_start=self._obj.index.min().strftime('%Y-%m-%d'), realtime_end=datetime.datetime.now().strftime('%Y-%m-%d'))
         return fred_ticker_df
     
-    def clean_fred_data(self, fred_ticker:str, fred_df: pd.DataFrame, tz : str = 'America/New_York'):
+    @staticmethod
+    def clean_fred_data(fred_ticker:str, fred_df: pd.DataFrame, tz : str = 'America/New_York'):
         """
         Cleans the data including converting the Datetime column into the local time of the area you want and only keeping the last value when duplicates arise (related to FREDAPI data). Also renames the columns to include ticker as a suffix to differentiate.
 
@@ -140,22 +129,17 @@ class StockData(pd.DataFrame):
             fred_df.rename(columns={col: col + '_' + fred_ticker}, inplace=True)
         return fred_df
     
-    def merge_stock_to_fred(self, merged_df, fred_df: pd.DataFrame):
-        merged_stock = merged_df.merge(right = fred_df, left_index = True, right_on = 'realtime_start', how = 'left')
-        merged_stock.__class__ = StockData
-        return merged_stock
+    def merge_stock_to_fred(self, fred_df: pd.DataFrame):
+        self._obj = self._obj.merge(right = fred_df, left_index = True, right_on = 'realtime_start', how = 'left')
+        return self._obj
     
-    def copy_df(self, deep=True):
-        copied_df = super().copy(deep = True)
-        if deep:
-            copied_df.__class__ = StockData
-        return copied_df
+    def set_merged_index_to_date(self):
+        self._obj = self._obj.set_index(keys = 'realtime_start', drop = True)
+        return self._obj
     
-    def set_merged_index_to_date(self, merged_df):
-
-        new_data = merged_df.set_index(keys = 'realtime_start', drop = True)
-        new_data.__class__ = StockData
-        return new_data
+    def clean_all_data(self):
+        self._obj = self._obj.ffill(axis = 0)
+        return self._obj
 
     def attach_fred_data(self, fred_tickers: list, tz: str = 'America/New_York'):
         """
@@ -165,13 +149,13 @@ class StockData(pd.DataFrame):
         - tickers (list): List of FRED data series tickers.
         - tz (str): Any timezone you want, a list can be found online.
         """
-        merged_df = self.copy_df(deep = True)
         for fred_ticker in fred_tickers:
             fred_df = self.single_fred_data(fred_ticker)
             fred_df = self.clean_fred_data(fred_ticker, fred_df, tz = tz)
-            merged_df = self.merge_stock_to_fred(merged_df = merged_df, fred_df = fred_df)
-            merged_df = self.set_merged_index_to_date(merged_df = merged_df)
-        return merged_df
+            self._obj = self.merge_stock_to_fred(fred_df = fred_df)
+            self._obj = self.set_merged_index_to_date()
+            self._obj = self.clean_all_data()
+        return self._obj
 
 
 # COMMAND ----------
@@ -186,15 +170,21 @@ ticker = 'AAPL'
 start_date = '2017-01-01'
 
 # Create an instance of StockData
-AAPL = StockData(ticker, start_date)
+# AAPL = StockData(ticker, start_date)
+
+AAPL = yf.Ticker(ticker = ticker).history(start = start_date)
 
 # COMMAND ----------
 
-type(AAPL)
+AAPL = AAPL.findata.attach_fred_data(fred_tickers = fred_tickers)
 
 # COMMAND ----------
 
-display(AAPL)
+AAPL
+
+# COMMAND ----------
+
+AAPL.describe()
 
 # COMMAND ----------
 
