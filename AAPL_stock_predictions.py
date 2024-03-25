@@ -44,10 +44,6 @@ spark.sql(f"CREATE DATABASE IF NOT EXISTS aaronxwalker")
 
 # COMMAND ----------
 
-# dbutils.library.restartPython()
-
-# COMMAND ----------
-
 import numpy as np
 import pandas as pd
 import numba
@@ -65,52 +61,88 @@ fred = Fred(api_key_file='fred_api_key.txt')
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## importing AAPL stock data
+# MAGIC ## Extending pandas API
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC My target is:
-# MAGIC - the returns on day t+1
-# MAGIC
-# MAGIC I want to start with the obvious features to use:
-# MAGIC - lagged variables:
-# MAGIC   - returns
-# MAGIC   - volume
-# MAGIC   - open - close
-# MAGIC   - trailing volume
-# MAGIC   - trailing returns
-# MAGIC   - price/earnings
-# MAGIC - interest rate
-# MAGIC - days till earnings report
-# MAGIC - month of year
-# MAGIC - week of year
-# MAGIC - day of week
-# MAGIC - inflation
-# MAGIC
-# MAGIC To be introduced at a later date:
-# MAGIC - pass
-# MAGIC
-# MAGIC
+AAPL.index.day
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ### Selecting Stock
+@pd.api.extensions.register_dataframe_accessor("date_features")
+class DateFeatures:
+    def __init__(self, pandas_obj):
+        self._obj = pandas_obj
+    
+    def get_basic_day_elements(self):
+        self._obj['year'] = self._obj.index.year
+        self._obj['month'] = self._obj.index.month
+        self._obj['dayOfMonth'] = self._obj.index.day
+        self._obj['dayOfWeek'] = self._obj.index.to_series().apply(lambda x: x.weekday())
+
 
 # COMMAND ----------
 
-@pd.api.extensions.register_dataframe_accessor("findata")
+@pd.api.extensions.register_dataframe_accessor("clean_code")
+class CleanCode:
+    def __init__(self, pandas_obj):
+        self._obj = pandas_obj
+
+    def lower_column_names(self):
+        for col in self._obj.columns:
+            self._obj.rename(columns = {col:col.lower()}, inplace = True)
+        return self._obj
+
+# COMMAND ----------
+
+@pd.api.extensions.register_dataframe_accessor("prices_data")
+class PricesData:
+    def __init__(self, pandas_obj):
+        self._obj = pandas_obj
+
+    def gather_stock_prices(self, stock_list):
+        for stock in stock_list:
+            stock_data = yf.Ticker(stock).history(start = '2017-01-01')
+            stock_data.index = stock_data.index.date
+            stock_data = stock_data.stock_data.create_returns(target_column = 'Close', updated_column_name = 'returns', target = False)
+            stock_data = stock_data.clean_code.lower_column_names()
+            for col in stock_data.columns:
+                stock_data.rename(columns = {col: col+'_'+stock}, inplace = True)
+            self._obj = self._obj.merge(right = stock_data, left_index = True, right_index = True, how = 'left')
+        return self._obj
+
+# COMMAND ----------
+
+@pd.api.extensions.register_dataframe_accessor("stock_data")
 class StockData:
+    def __init__(self, pandas_obj):
+        self._obj = pandas_obj
+
+    def create_returns(self, target_column:str = 'close', updated_column_name:str = 'returns', target: bool = False, log: bool = False):
+        """
+        Convert price of asset to returns given by price of day t divided by price of day t-1, minus 1. Also lag by a timestep if its the target column. Have the option to create log returns given by log(Rt/Rt-1). Returns the dataframe with the updated target.
+        """
+        if target:
+            self._obj[updated_column_name] = self._obj[target_column]/self._obj[target_column].shift(1)-1
+            self._obj[updated_column_name] = self._obj[updated_column_name].shift(-1)
+        else:
+            self._obj[updated_column_name] = self._obj[target_column]/self._obj[target_column].shift(1)-1
+        return self._obj
+    
+    def convert_index_to_date(self):
+        self._obj.index = self._obj.index.date
+        return self._obj
+
+# COMMAND ----------
+
+@pd.api.extensions.register_dataframe_accessor("fred_data")
+class FredData:
     def __init__(self, pandas_obj):
         self._obj = pandas_obj
 
     def single_fred_data(self, fred_ticker: str):
         """
-        Retrieve data for a single ticker from the St Louis Fed (FREDAPI).
-
-        Parameters:
-        - ticker: FRED data series ticker.
+        Retrieve data for a single ticker from the St Louis Fed (FREDAPI). Returns the dataframe for the fred ticker.
         """
         fred_ticker_df = fred.get_series_all_releases(fred_ticker, realtime_start=self._obj.index.min().strftime('%Y-%m-%d'), realtime_end=datetime.datetime.now().strftime('%Y-%m-%d'))
         return fred_ticker_df
@@ -118,26 +150,33 @@ class StockData:
     @staticmethod
     def clean_fred_data(fred_ticker:str, fred_df: pd.DataFrame, tz : str = 'America/New_York'):
         """
-        Cleans the data including converting the Datetime column into the local time of the area you want and only keeping the last value when duplicates arise (related to FREDAPI data). Also renames the columns to include ticker as a suffix to differentiate.
-
-        Parameters:
-        - tz: Any timezone you want, a list can be found online.
+        Cleans the data including converting the Datetime column into the local time of the area you want and only keeping the last value when duplicates arise (related to FREDAPI data). Also renames the columns to include ticker as a suffix to differentiate. Returns the fred data except with renamed columns.
         """
-        fred_df['realtime_start'] = fred_df['realtime_start'].dt.tz_localize(tz)
+        fred_df['realtime_start'] = fred_df['realtime_start'].dt.tz_localize(tz).dt.date
         fred_df.drop_duplicates(subset='realtime_start', keep='last', inplace=True)
+        fred_df = fred_df.clean_code.lower_column_names()
         for col in renamed_cols:
             fred_df.rename(columns={col: col + '_' + fred_ticker}, inplace=True)
         return fred_df
     
-    def merge_stock_to_fred(self, fred_df: pd.DataFrame):
+    def merge_fred_to_stock_data(self, fred_df: pd.DataFrame):
+        """
+        Returns a merged dataframe of your original data and the fred data.
+        """
         self._obj = self._obj.merge(right = fred_df, left_index = True, right_on = 'realtime_start', how = 'left')
         return self._obj
     
     def set_merged_index_to_date(self):
+        """
+        Returns your original dataframe except with the index being dropped and replaced by the realtime start from the merged fred data.
+        """
         self._obj = self._obj.set_index(keys = 'realtime_start', drop = True)
         return self._obj
     
     def clean_all_data(self):
+        """
+        Forward fills all of the data in the dataframe over missing values. Can be susceptable to missing values from the start with no previous values to forward fill.
+        """
         self._obj = self._obj.ffill(axis = 0)
         return self._obj
 
@@ -152,71 +191,12 @@ class StockData:
         for fred_ticker in fred_tickers:
             fred_df = self.single_fred_data(fred_ticker)
             fred_df = self.clean_fred_data(fred_ticker, fred_df, tz = tz)
-            self._obj = self.merge_stock_to_fred(fred_df = fred_df)
+            self._obj = self.merge_fred_to_stock_data(fred_df = fred_df)
             self._obj = self.set_merged_index_to_date()
-            self._obj = self.clean_all_data()
+        self._obj = self.clean_all_data()
+        self._obj.index = pd.to_datetime(self._obj.index)
         return self._obj
 
-
-# COMMAND ----------
-
-fred_tickers = ['T10YIE', 'CPIAUCSL', 'UNRATE', 'GDP', 'GDPC1', 'FEDFUNDS', 'REAINTRATREARAT10Y', 'MORTGAGE30US', 'MORTGAGE15US', 'A792RC0Q052SBEA']
-yahoo_data = ['GBPUSD=X', 'EURUSD=X', 'CNY=X']
-renamed_cols = fred.get_series_all_releases('T10YIE', realtime_start='2017-01-01', realtime_end=datetime.datetime.now().strftime('%Y-%m-%d')).columns.drop('realtime_start')
-
-# COMMAND ----------
-
-ticker = 'AAPL'
-start_date = '2017-01-01'
-
-# Create an instance of StockData
-# AAPL = StockData(ticker, start_date)
-
-AAPL = yf.Ticker(ticker = ticker).history(start = start_date)
-
-# COMMAND ----------
-
-AAPL = AAPL.findata.attach_fred_data(fred_tickers = fred_tickers)
-
-# COMMAND ----------
-
-AAPL
-
-# COMMAND ----------
-
-AAPL.describe()
-
-# COMMAND ----------
-
-hasattr(AAPL, 'single_fred_data') and callable(AAPL.single_fred_data)
-
-# COMMAND ----------
-
-fred_tickers
-
-# COMMAND ----------
-
-# Attach FRED data
-stock_data_instance = AAPL.attach_fred_data(fred_tickers = fred_tickers)
-
-# COMMAND ----------
-
-type(stock_data_instance)
-
-# COMMAND ----------
-
-stock_data_instance
-
-# COMMAND ----------
-
-# Now, stock_data_instance behaves like a DataFrame with additional functionalities
-print(stock_data_instance.head())
-
-# COMMAND ----------
-
-stock = 'AAPL'
-aapl = yf.Ticker(stock)
-AAPL = aapl.history(start = '2017-01-01')
 
 # COMMAND ----------
 
@@ -266,15 +246,36 @@ AAPL = aapl.history(start = '2017-01-01')
 
 # COMMAND ----------
 
-for data in fred_data:
-    df = fred.get_series_all_releases(data, realtime_start='2017-01-01', realtime_end=datetime.datetime.now().strftime('%Y-%m-%d'))
-    df['realtime_start'] = df['realtime_start'].dt.tz_localize('America/New_York')
-    df.drop_duplicates(subset = 'realtime_start', keep = 'last', inplace = True)
-    for col in renamed_cols:
-        df.rename(columns={col:col+'_'+data}, inplace = True)
-    AAPL = AAPL.merge(right = df, left_index= True, right_on= 'realtime_start', how = 'left', suffixes = None)
-    AAPL.set_index('realtime_start', inplace = True, drop = True)
-    print(f'done {data}')
+# MAGIC %md
+# MAGIC get realtime_start to see when it was actually recorded so you know how long to lag it by, for example in the below it has a date of 10th October 2023 for the data (beginning of the quarter) but actually it wasn't available data until 28th February 2024
+
+# COMMAND ----------
+
+ticker = 'AAPL'
+start_date = '2017-01-01'
+
+AAPL = yf.Ticker(ticker = ticker).history(start = start_date)
+AAPL = AAPL.clean_code.lower_column_names()
+
+# COMMAND ----------
+
+AAPL = AAPL.stock_data.create_returns(target = True)
+AAPL = AAPL.stock_data.convert_index_to_date()
+
+# COMMAND ----------
+
+fred_tickers = ['T10YIE', 'CPIAUCSL', 'UNRATE', 'GDP', 'GDPC1', 'FEDFUNDS', 'REAINTRATREARAT10Y', 'MORTGAGE30US', 'MORTGAGE15US', 'A792RC0Q052SBEA']
+exchange_rate_tickers = ['GBPUSD=X', 'EURUSD=X', 'CNY=X']
+tech_stock_tickers = ['MSFT', 'AMZN', 'TSLA', 'NVDA', 'GOOG', 'META']
+index_tickers = ['^FTSE', '^GSPC', '^DJI', '^IXIC', '^GDAXI', '^N225']
+renamed_cols = fred.get_series_all_releases('T10YIE', realtime_start='2017-01-01', realtime_end=datetime.datetime.now().strftime('%Y-%m-%d')).columns.drop('realtime_start')
+
+# COMMAND ----------
+
+AAPL = AAPL.fred_data.attach_fred_data(fred_tickers = fred_tickers)
+AAPL = AAPL.prices_data.gather_stock_prices(stock_list = exchange_rate_tickers)
+AAPL = AAPL.prices_data.gather_stock_prices(stock_list = index_tickers)
+AAPL = AAPL.prices_data.gather_stock_prices(stock_list = tech_stock_tickers)
 
 # COMMAND ----------
 
@@ -282,19 +283,39 @@ AAPL
 
 # COMMAND ----------
 
-df = fred.get_series_all_releases('T10YIE', realtime_start='2017-01-01', realtime_end=datetime.datetime.now().strftime('%Y-%m-%d'))
-df['realtime_start'] = df['realtime_start'].dt.tz_localize('America/New_York')
-# df.drop_duplicates(subset = 'realtime_start', keep = 'last', inplace = True)
-df
-
-# COMMAND ----------
-
-AAPL.merge(df, left_index= True, right_on='realtime_start', how = 'left', suffixes = ('x','y'))
+AAPL.describe()
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC get realtime_start to see when it was actually recorded so you know how long to lag it by, for example in the below it has a date of 10th October 2023 for the data (beginning of the quarter) but actually it wasn't available data until 28th February 2024
+# MAGIC ### Gathering price data (stock prices, index prices, international index prices)
+
+# COMMAND ----------
+
+stock_list = ['AAPL', 'MSFT', 'TSLA']
+
+# COMMAND ----------
+
+for stock in stock_list:
+    stock_data = yf.Ticker(stock).history(start = '2017-01-01')
+    stock_data.index = stock_data.index.date
+    for col in stock_data.columns:
+        stock_data.rename(columns = {col: col+stock}, inplace = True)
+
+# COMMAND ----------
+
+TSLA
+
+# COMMAND ----------
+
+MSFT = yf.Ticker('MSFT').history(start = '2017-01-01')
+MSFT.index = MSFT.index.date
+for col in MSFT.columns:
+    MSFT.rename(columns = {col: col+'_MSFT'}, inplace = True)
+
+# COMMAND ----------
+
+MSFT
 
 # COMMAND ----------
 
